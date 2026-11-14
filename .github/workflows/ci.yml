@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: adhatcher-org/shared-workflows/.github/workflows/app-ci.yml@456f186a9c21632af188bde4ebf7ce6e11953831 # v1.0.2
+    with:
+      python-version: "3.12"
+      dependency-manager: uv
+      uv-version: "0.11.7"
+      use-node: true
+      node-version: "22"
+      node-directory: frontend
+      run-lint: true
+      run-typecheck: false
+      run-tests: true
+      run-coverage: true
+      run-security: true
+      run-dependency-check: true
+      run-pr-check: true
+      run-docker-build: true
+
+  helper-build:
+    name: Build control helper
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - run: docker build --target helper -t swag-ui-helper:ci .
