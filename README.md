@@ -4,7 +4,7 @@ SWAG Control is a private web interface for reviewing and editing [LinuxServer S
 
 ## What it manages
 
-- Lists direct `.conf` files in SWAG's `nginx/proxy-confs` directory. A file's active status is shown as **unknown** until the Nginx include graph is verified; the extension alone is not proof that a file is loaded.
+- Lists direct `.conf` files in SWAG's `nginx/proxy-confs` directory. A file is shown as **active** when SWAG's `nginx -T` output lists it as loaded, **inactive** when it does not, and **unknown** when the helper or SWAG is unavailable; the `.conf` extension alone is not proof that a file is loaded.
 - Reads and edits a selected proxy file with revision conflict detection and persistent drafts.
 - Activates a draft through a separate control container. Validation failures restore the original file without requesting a reload.
 - Shows SWAG state, the `SWAG_AUTORELOAD` setting, certificate names and expiry dates, and optional Tailscale container status.
@@ -39,7 +39,7 @@ The helper's `/backups` volume retains a copy of the original file for each acti
 
 ## Activation and recovery
 
-Activation checks the current file hash, backs up the original outside SWAG's watched tree, atomically replaces the file, runs `nginx -t`, then asks Nginx to reload. A failed syntax test restores the file without a reload. A failed reload restores the file and reports **active state uncertain** because the running configuration cannot be inferred from a failed signal alone. A successful reload command is reported as **reload requested**, not as proof that every route works.
+Activation checks the current file hash, backs up the original outside SWAG's watched tree, atomically replaces the file, runs `nginx -t`, then asks Nginx to reload. A failed syntax test restores the file without a reload. A failed reload restores the file and reports **active state uncertain** because the running configuration cannot be inferred from a failed signal alone. A successful reload command is reported as **reload requested**, not as proof that every route works. The web service waits up to 150 seconds for the helper; if it gets no answer it reports **activation result unknown**, because the helper may still finish under its lock. If you put a reverse proxy in front of the UI, give it a read timeout above 150 seconds.
 
 If active state is uncertain, stop applying drafts. Inspect the SWAG container logs and running routes, compare the current file with the backup in the helper's `backups` volume, restore the original if needed, run `nginx -t` in SWAG, and manually reload or restart only after the original configuration is known good. External edits or manual reloads are outside the helper's lock; the hash check detects a changed file before activation but cannot prevent another administrator from acting simultaneously.
 

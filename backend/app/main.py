@@ -12,7 +12,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from backend.app.ai import AIUnavailable, redact, suggest
-from backend.app.control_client import ControlClient, ControlUnavailable
+from backend.app.control_client import ControlClient, ControlTimeout, ControlUnavailable
 from backend.app.drafts import DraftStore
 from backend.app.files import InvalidProxyFile, list_proxies, read_proxy
 from backend.app.settings import Settings
@@ -153,6 +153,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, "Draft unavailable")
         try:
             result = await control.activate(draft.name, draft.content, draft.base_hash)
+        except ControlTimeout as exc:
+            store.audit(draft_id, "result_unknown")
+            raise HTTPException(
+                504,
+                "Activation result unknown: the control service did not answer in time and "
+                "may still finish. Check the proxy file and SWAG state before applying again.",
+            ) from exc
         except ControlUnavailable as exc:
             raise HTTPException(503, str(exc)) from exc
         store.audit(draft_id, result.get("status", "unknown"))
