@@ -28,6 +28,73 @@ The app has a local admin password, signed session cookies, CSRF checks, and a l
 6. Build and start the two services with `docker compose --env-file .env up -d --build`. Map the host port to a private interface or place the app behind a trusted HTTPS reverse proxy. Avoid making this management interface depend on the SWAG instance it controls for emergency access.
 7. Before enabling activation against production, test with a disposable SWAG container using the same image and representative proxy files. Confirm valid, invalid, and conflicting edits, and inspect the retained backup and SWAG logs.
 
+### Step by step on Unraid
+
+Deploy with Docker Compose from the Unraid terminal, not with a single Unraid Docker template. The app is two containers that share a private socket: the published `ghcr.io/adhatcher/swag-ui` image is only the `web` half. On its own it cannot activate drafts, and it exits at startup unless the admin password and session secret are set. The `helper` image is not published; Compose builds it on the host.
+
+1. If you already created a `swag-ui` container from a template, remove it so it does not hold the port: `docker rm -f swag-ui`. Delete the template from the Docker tab as well.
+2. Check that Compose is available with `docker compose version`. If it is not, install the **Compose Manager** plugin from Community Applications.
+3. Download the code into an appdata folder. Unraid may not include `git`, so fetch the archive:
+
+   ```sh
+   mkdir -p /mnt/user/appdata/swag-ui && cd /mnt/user/appdata/swag-ui
+   wget -qO- https://github.com/adhatcher/swag-ui/archive/refs/heads/main.tar.gz | tar xz --strip-components=1
+   ```
+
+   Any appdata location works. The Compose project takes its name from the folder, so the volumes in this guide are named `swag-ui_*`.
+4. Find SWAG's container name and the host folder mapped to its `/config`:
+
+   ```sh
+   docker ps --format '{{.Names}}' | xargs -I{} docker inspect {} --format '{{.Name}} {{range .Mounts}}{{if eq .Destination "/config"}}{{.Source}}{{end}}{{end}}'
+   ```
+
+   The folder you use for `SWAG_CONFIG_PATH` must contain `nginx/proxy-confs`.
+5. In SWAG's Unraid template, add the variable `SWAG_AUTORELOAD` with the value `false`, then apply so the container is recreated.
+6. Create `.env`. Replace the example IP, hostname, path and container name with your own:
+
+   ```sh
+   cd /mnt/user/appdata/swag-ui && cat > .env <<EOF
+   SWAG_CONFIG_PATH=/mnt/user/appdata/swag
+   SWAG_CONTAINER_NAME=swag
+   SWAG_UI_BIND_ADDRESS=192.168.1.10
+   SWAG_UI_PORT=8022
+   SWAG_UI_ALLOWED_HOSTS=192.168.1.10,tower.local
+   SWAG_UI_COOKIE_SECURE=false
+   SWAG_UI_ADMIN_PASSWORD=$(openssl rand -base64 18)
+   SWAG_UI_SESSION_SECRET=$(openssl rand -hex 32)
+   EOF
+   chmod 600 .env && grep ADMIN_PASSWORD .env
+   ```
+
+   The last command prints the sign-in password.
+   - `SWAG_UI_BIND_ADDRESS` is the host IP the UI listens on. Use the server's LAN IP, or its Tailscale IP to keep the UI on your tailnet. Never forward this port from the internet.
+   - `SWAG_UI_ALLOWED_HOSTS` lists every hostname or IP you will type in the browser, without the port.
+   - `SWAG_UI_COOKIE_SECURE=false` is only for plain HTTP on a private network. Set it to `true` when the UI is served over HTTPS.
+   - Optionally add `TAILSCALE_CONTAINER_NAME` and the `LITELLM_*` values from `.env.example`.
+7. Build and start both containers:
+
+   ```sh
+   cd /mnt/user/appdata/swag-ui && docker compose --env-file .env up -d --build && docker compose ps
+   ```
+
+   Both `web` and `helper` should report `healthy` within about a minute.
+8. Open `http://<bind-address>:8022` and sign in. The overview should show SWAG as **running** and auto reload as **Disabled**. Make one harmless change, such as adding a comment line to a proxy file, and activate it. It should report "reload requested", and `docker logs <swag container>` should show no errors.
+
+To update later, repeat the download in step 3; it keeps your `.env`. Then run the command in step 7 again. To stop the app, run `docker compose down` in the same folder. That keeps the drafts and backups volumes; `docker compose down -v` deletes them.
+
+### Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| `docker: invalid reference format` when applying a template | The template's Repository field holds a command such as `docker pull ghcr.io/...`. It must hold only an image name. Use the Compose steps above instead of a template. |
+| `ValueError: SWAG_UI_ADMIN_PASSWORD must be at least 16 characters` (or `SWAG_UI_SESSION_SECRET ... 32`) in the logs | The container started without those settings, usually because it came from a single template. Remove it, set both values in `.env`, and start with `docker compose --env-file .env`. |
+| `Invalid host header` in the browser | The hostname or IP in the address bar is missing from `SWAG_UI_ALLOWED_HOSTS`. Add it and run `docker compose --env-file .env up -d`. |
+| Sign-in fails with `Invalid CSRF token` over plain HTTP | `SWAG_UI_COOKIE_SECURE=true` makes the browser discard the session cookie on an `http://` address. Use HTTPS, or set it to `false` on a private network. |
+| `Bind for ... failed: port is already allocated` | Another container already uses the port, often a leftover template container. Remove it or change `SWAG_UI_PORT`. |
+| Overview shows SWAG `unavailable` | The helper is not running or `SWAG_CONTAINER_NAME` is wrong. Check `docker compose logs helper` and `docker ps`. |
+| Activation says `SWAG_AUTORELOAD must be explicitly false` | SWAG's container does not have `SWAG_AUTORELOAD=false`. Set it in SWAG's template and apply. |
+| No proxy files listed | `SWAG_CONFIG_PATH` does not point at the folder containing `nginx/proxy-confs`, or the files are not readable by others. The web container reads them as uid 10001. |
+
 Ports and volumes:
 
 | Service | Exposure | Persistent or host mounts |
