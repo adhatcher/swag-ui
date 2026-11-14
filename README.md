@@ -45,10 +45,10 @@ Deploy with Docker Compose from the Unraid terminal, not with a single Unraid Do
 4. Find SWAG's container name and the host folder mapped to its `/config`:
 
    ```sh
-   docker ps --format '{{.Names}}' | xargs -I{} docker inspect {} --format '{{.Name}} {{range .Mounts}}{{if eq .Destination "/config"}}{{.Source}}{{end}}{{end}}'
+   docker ps --format '{{.Names}}' | xargs -I{} docker inspect {} --format '{{slice .Name 1}} {{range .Mounts}}{{if eq .Destination "/config"}}{{.Source}}{{end}}{{end}}'
    ```
 
-   The folder you use for `SWAG_CONFIG_PATH` must contain `nginx/proxy-confs`.
+   Each line shows a container name and, for containers with a `/config` mount, its host folder. Use SWAG's name for `SWAG_CONTAINER_NAME` and its folder for `SWAG_CONFIG_PATH`; that folder must contain `nginx/proxy-confs`.
 5. In SWAG's Unraid template, add the variable `SWAG_AUTORELOAD` with the value `false`, then apply so the container is recreated.
 6. Create `.env`. Replace the example IP, hostname, path and container name with your own:
 
@@ -78,7 +78,7 @@ Deploy with Docker Compose from the Unraid terminal, not with a single Unraid Do
    ```
 
    Both `web` and `helper` should report `healthy` within about a minute.
-8. Open `http://<bind-address>:8022` and sign in. The overview should show SWAG as **running** and auto reload as **Disabled**. Make one harmless change, such as adding a comment line to a proxy file, and activate it. It should report "reload requested", and `docker logs <swag container>` should show no errors.
+8. Open `http://<bind-address>:8022` and sign in. The overview should show SWAG as **running** and auto reload as **Disabled**. Make one harmless change, such as adding a comment line to a proxy file, and activate it. A green notice should say "Nginx accepted the reload signal. Verify the service before relying on the new route.", and `docker logs <swag container>` should show no errors.
 
 To update later, repeat the download in step 3; it keeps your `.env`. Then run the command in step 7 again. To stop the app, run `docker compose down` in the same folder. That keeps the drafts and backups volumes; `docker compose down -v` deletes them.
 
