@@ -15,7 +15,13 @@ from cryptography import x509
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from backend.app.files import MAX_CONFIG_BYTES, InvalidProxyFile, read_proxy, valid_name
+from backend.app.files import (
+    MAX_CONFIG_BYTES,
+    InvalidProxyFile,
+    proxy_path,
+    read_proxy,
+    valid_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,17 +102,17 @@ def activate(body: ActivationBody, client=None) -> dict:
             container = _container(client)
             if _auto_reload(container) != "false":
                 return {"status": "blocked", "message": "SWAG_AUTORELOAD must be explicitly false"}
-            original, digest = read_proxy(PROXY_DIR, body.name)
+            path = proxy_path(PROXY_DIR, body.name)
+            original, digest = read_proxy(PROXY_DIR, path.name)
         except (docker.errors.DockerException, OSError, InvalidProxyFile) as exc:
             logger.warning("Activation preflight failed: %s", type(exc).__name__)
             return {"status": "blocked", "message": "SWAG preflight unavailable"}
         if digest != body.base_hash:
             return {"status": "conflict", "message": "Proxy changed since draft was created"}
-        path = PROXY_DIR / body.name
         try:
             BACKUP_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
             os.chmod(BACKUP_DIR, 0o700)
-            backup = BACKUP_DIR / f"{uuid.uuid4().hex}-{body.name}"
+            backup = BACKUP_DIR / f"{uuid.uuid4().hex}-{path.name}"
             fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as handle:
                 handle.write(original.encode("utf-8"))

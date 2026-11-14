@@ -20,9 +20,21 @@ def valid_name(name: str) -> str:
     return name
 
 
-def read_proxy(proxy_dir: Path, name: str) -> tuple[str, str]:
+def proxy_path(proxy_dir: Path, name: str) -> Path:
+    """Return the direct child of ``proxy_dir`` named ``name``.
+
+    The returned path is built from the directory listing, never from the caller's
+    string, so request input cannot shape a filesystem path.
+    """
     valid_name(name)
-    fd = os.open(proxy_dir / name, os.O_RDONLY | os.O_NOFOLLOW)
+    for entry in os.listdir(proxy_dir):
+        if entry == name:
+            return proxy_dir / entry
+    raise FileNotFoundError("Proxy file not found")
+
+
+def read_proxy(proxy_dir: Path, name: str) -> tuple[str, str]:
+    fd = os.open(proxy_path(proxy_dir, name), os.O_RDONLY | os.O_NOFOLLOW)
     try:
         metadata = os.fstat(fd)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_CONFIG_BYTES:

@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from backend.app.drafts import DraftStore
-from backend.app.files import InvalidProxyFile, read_proxy
+from backend.app.files import InvalidProxyFile, proxy_path, read_proxy
 
 
 def test_draft_stays_outside_live_swag_tree(tmp_path: Path) -> None:
@@ -34,3 +34,15 @@ def test_proxy_access_rejects_traversal_and_symlink(tmp_path: Path) -> None:
         read_proxy(proxy_dir, "../secret.conf")
     with pytest.raises(OSError):
         read_proxy(proxy_dir, "link.conf")
+
+
+def test_proxy_path_only_returns_listed_direct_children(tmp_path: Path) -> None:
+    proxy_dir = tmp_path / "proxy-confs"
+    proxy_dir.mkdir()
+    (proxy_dir / "one.subdomain.conf").write_text("server {}\n")
+
+    assert proxy_path(proxy_dir, "one.subdomain.conf") == proxy_dir / "one.subdomain.conf"
+    with pytest.raises(FileNotFoundError):
+        proxy_path(proxy_dir, "missing.conf")
+    with pytest.raises(InvalidProxyFile):
+        proxy_path(proxy_dir, "nested/one.subdomain.conf")
