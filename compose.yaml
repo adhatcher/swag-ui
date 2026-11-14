@@ -1,0 +1,61 @@
+services:
+  web:
+    build:
+      context: .
+      target: web
+    image: swag-ui:local
+    restart: unless-stopped
+    ports:
+      - "${SWAG_UI_BIND_ADDRESS:-127.0.0.1}:${SWAG_UI_PORT:-8080}:8080"
+    environment:
+      SWAG_UI_ADMIN_PASSWORD: ${SWAG_UI_ADMIN_PASSWORD:?set a long admin password}
+      SWAG_UI_SESSION_SECRET: ${SWAG_UI_SESSION_SECRET:?set a random session secret}
+      SWAG_UI_COOKIE_SECURE: ${SWAG_UI_COOKIE_SECURE:-true}
+      SWAG_UI_ALLOWED_HOSTS: ${SWAG_UI_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-}
+      LITELLM_MODEL: ${LITELLM_MODEL:-}
+    volumes:
+      - ${SWAG_CONFIG_PATH:?set SWAG config path}/nginx/proxy-confs:/swag/proxy-confs:ro
+      - app_data:/data
+      - control_socket:/run/swag-ui
+    depends_on:
+      helper:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  helper:
+    build:
+      context: .
+      target: helper
+    image: swag-ui-helper:local
+    restart: unless-stopped
+    network_mode: none
+    environment:
+      SWAG_CONTAINER_NAME: ${SWAG_CONTAINER_NAME:-swag}
+      TAILSCALE_CONTAINER_NAME: ${TAILSCALE_CONTAINER_NAME:-}
+      SWAG_UI_SOCKET_GID: "10001"
+    volumes:
+      - ${SWAG_CONFIG_PATH:?set SWAG config path}/nginx/proxy-confs:/swag/proxy-confs:rw
+      - ${SWAG_CONFIG_PATH:?set SWAG config path}/etc/letsencrypt:/swag/letsencrypt:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - control_socket:/run/swag-ui
+      - backups:/backups
+    healthcheck:
+      test: ["CMD", "test", "-S", "/run/swag-ui/control.sock"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  app_data:
+  control_socket:
+  backups:

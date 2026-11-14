@@ -1,0 +1,13 @@
+.venv/
+.uv-cache/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.env
+data/
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+.serena/
