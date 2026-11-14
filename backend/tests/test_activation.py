@@ -157,3 +157,21 @@ def test_tailscale_status_parses_json_larger_than_log_tail(monkeypatch) -> None:
     monkeypatch.setattr(control, "TAILSCALE_NAME", "tailscale")
     client = SimpleNamespace(containers=SimpleNamespace(get=lambda name: container))
     assert control.tailscale_status(client) == {"state": "online"}
+
+
+def test_docker_error_during_activation_restores_file(tmp_path: Path, monkeypatch) -> None:
+    live, body = setup_proxy(tmp_path, monkeypatch)
+    container = FakeContainer()
+
+    def exec_run(args: list[str], demux: bool = False) -> SimpleNamespace:
+        container.commands.append(args)
+        raise control.docker.errors.APIError("socket closed")
+
+    container.exec_run = exec_run
+
+    result = control.activate(body, FakeClient(container))
+
+    assert result["status"] == "active_state_uncertain"
+    assert live.read_text() == "server { listen 443; }\n"
+    assert container.commands == [["nginx", "-t"]]
+    assert len(list((tmp_path / "backups").iterdir())) == 1
