@@ -133,7 +133,7 @@ Use this instead of Compose if you prefer to manage containers from the Docker t
    | Name | `swag-ui` |
    | Repository | `ghcr.io/adhatcher/swag-ui:latest` |
    | Network Type | `Bridge` |
-   | Port | Host `8022`, container `8080` |
+   | Port | Host `8022`, container `8080`. To listen on one IP only, as Compose does, leave this out and add `-p 192.168.1.10:8022:8080` to Extra Parameters |
    | Variable `SWAG_UI_ADMIN_PASSWORD` | First line from step 4 (at least 16 characters) |
    | Variable `SWAG_UI_SESSION_SECRET` | Second line from step 4 (at least 32 characters) |
    | Variable `SWAG_UI_ALLOWED_HOSTS` | Every hostname or IP you type in the browser, for example `192.168.1.10,tower.local` |
@@ -151,7 +151,8 @@ Notes:
 
 - Both containers must map the same host folder to `/run/swag-ui`. `/tmp` on Unraid is cleared at reboot; the helper recreates the socket when it starts.
 - Unraid's update check works for `swag-ui`. It does not apply to `swag-ui-helper:local`: to update the helper, repeat the download and build in step 2, then restart the container.
-- Never forward the UI port from the internet.
+- A Port field mapping listens on every host interface. Use the `-p <ip>:8022:8080` form in Extra Parameters to limit it to the LAN or Tailscale IP, and never forward the UI port from the internet.
+- Drafts save even when activation is blocked. Activation needs `SWAG_AUTORELOAD=false` on SWAG's container (step 1).
 
 ### Troubleshooting
 
@@ -160,12 +161,11 @@ Notes:
 | `docker: invalid reference format` when applying a template | The template's Repository field holds a command such as `docker pull ghcr.io/...`. It must hold only an image name, such as `ghcr.io/adhatcher/swag-ui:latest`. |
 | `ValueError: SWAG_UI_ADMIN_PASSWORD must be at least 16 characters` (or `SWAG_UI_SESSION_SECRET ... 32`) in the logs | The container started without those settings, or with values that are too short. With Compose, set both in `.env` and start with `docker compose --env-file .env`. With templates, add both variables to the `swag-ui` template as in step 6 of the template steps. |
 | Overview shows SWAG `unavailable` with templates | The two containers do not share the socket folder, or the helper is not running. Check that both map the same host folder to `/run/swag-ui`, and run `docker logs swag-ui-helper`. |
-| Auto reload shows **Unknown** | SWAG's container has no `SWAG_AUTORELOAD` variable. Add it with the value `false` and apply; activation is blocked until then. |
+| Auto reload shows **Unknown**, or activation says `blocked: SWAG_AUTORELOAD must be explicitly false` | SWAG's container has no `SWAG_AUTORELOAD` variable, or its value is not `false`. Your draft is still saved; only activation is blocked. Add the variable with the value `false` in SWAG's template and apply, then confirm with `docker inspect <swag container> --format '{{range .Config.Env}}{{println .}}{{end}}' \| grep AUTORELOAD`. |
 | `Invalid host header` in the browser | The hostname or IP in the address bar is missing from `SWAG_UI_ALLOWED_HOSTS`. Add it and run `docker compose --env-file .env up -d`. |
 | Sign-in fails with `Invalid CSRF token` over plain HTTP | `SWAG_UI_COOKIE_SECURE=true` makes the browser discard the session cookie on an `http://` address. Use HTTPS, or set it to `false` on a private network. |
 | `Bind for ... failed: port is already allocated` | Another container already uses the port, often a leftover template container. Remove it or change `SWAG_UI_PORT`. |
 | Overview shows SWAG `unavailable` | The helper is not running or `SWAG_CONTAINER_NAME` is wrong. Check `docker compose logs helper` and `docker ps`. |
-| Activation says `SWAG_AUTORELOAD must be explicitly false` | SWAG's container does not have `SWAG_AUTORELOAD=false`. Set it in SWAG's template and apply. |
 | No proxy files listed | `SWAG_CONFIG_PATH` does not point at the folder containing `nginx/proxy-confs`, or the files are not readable by others. The web container reads them as uid 10001. |
 
 Ports and volumes:
