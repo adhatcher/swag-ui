@@ -18,6 +18,21 @@ from backend.app.files import InvalidProxyFile, list_proxies, read_proxy
 from backend.app.settings import Settings
 
 
+class HostCheckMiddleware(TrustedHostMiddleware):
+    """Trusted-host check that lets the container healthcheck reach /healthz.
+
+    The Docker HEALTHCHECK calls http://127.0.0.1:8080/healthz, whose Host header
+    is rarely in SWAG_UI_ALLOWED_HOSTS. /healthz returns no data, so skipping the
+    check for that one path exposes nothing.
+    """
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http" and scope["path"] == "/healthz":
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
 class LoginBody(BaseModel):
     password: str
 
@@ -43,7 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.validate()
     app = FastAPI(title="SWAG UI", docs_url=None, redoc_url=None)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
+    app.add_middleware(HostCheckMiddleware, allowed_hosts=list(settings.allowed_hosts))
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.session_secret,

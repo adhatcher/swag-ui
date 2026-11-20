@@ -115,3 +115,24 @@ def test_activation_timeout_reports_unknown_result(tmp_path: Path, monkeypatch) 
     with sqlite3.connect(settings.data_dir / "swag-ui.sqlite3") as conn:
         outcomes = conn.execute("SELECT outcome FROM audit WHERE draft_id=?", (draft["id"],))
         assert [row[0] for row in outcomes] == ["result_unknown"]
+
+
+def test_healthz_skips_host_check_but_api_does_not(tmp_path: Path) -> None:
+    settings = Settings(
+        proxy_dir=tmp_path,
+        data_dir=tmp_path / "data",
+        helper_socket=tmp_path / "missing.sock",
+        admin_password="very-long-test-password",
+        session_secret="a" * 32,
+        cookie_secure=False,
+        allowed_hosts=("swag-ui.example.com",),
+        litellm_url=None,
+        litellm_key=None,
+        litellm_model=None,
+    )
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8080") as client:
+        assert client.get("/healthz").status_code == 200
+        assert client.get("/api/session").status_code == 400
+        assert client.get("/healthz/").status_code == 400
+    with TestClient(create_app(settings), base_url="http://swag-ui.example.com") as client:
+        assert client.get("/api/session").status_code == 200
