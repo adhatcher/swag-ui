@@ -14,7 +14,7 @@ DNS credentials, private keys, certificate contents, sample proxy files, site co
 
 ## Architecture and access
 
-SWAG Control is one container. It runs as `99:100` (Unraid's `nobody:users`, which owns SWAG's files) and mounts SWAG's `nginx/proxy-confs` folder **read-write**, the same folder SWAG itself uses, plus SWAG's Let's Encrypt folder read-only for certificate dates. It also has the Docker socket, so it can run fixed `nginx -t`, `nginx -s reload` and `nginx -T` commands in the configured SWAG container and read its settings. Drafts, the audit log and pre-activation backups live in `/data`.
+SWAG Control is one container. It runs as SWAG's `PUID:PGID` so it can replace SWAG's files; on Unraid that is normally `99:100` (`nobody:users`), the default used throughout this guide. It mounts SWAG's `nginx/proxy-confs` folder **read-write**, the same folder SWAG itself uses, plus SWAG's Let's Encrypt folder read-only for certificate dates. It also has the Docker socket, so it can run fixed `nginx -t`, `nginx -s reload` and `nginx -T` commands in the configured SWAG container and read its settings. Drafts, the audit log and pre-activation backups live in `/data`.
 
 **Docker socket access is root on the host.** Anyone who takes over this app can control every container on the Unraid server. Its password, CSRF checks and login rate limit are the only things in the way, so use a long random password, keep the UI on your LAN or tailnet, and deploy it only on a trusted host.
 
@@ -24,7 +24,7 @@ The app has a local admin password, signed session cookies, CSRF checks, and a l
 
 1. Confirm the **host** path mapped to `/config` in the SWAG container. Set `SWAG_CONFIG_PATH` to that path. `/mnt/user/appdata/swag` in `.env.example` is only an example; a network mount of the share on another machine is not the Unraid host path.
 2. In SWAG's Unraid Docker template, set `SWAG_AUTORELOAD=false` explicitly and recreate the SWAG container. The app checks this setting **before every activation** and blocks activation if it is true or unknown. Draft editing still works when activation is blocked. SWAG's [auto reload setting](https://docs.linuxserver.io/images/docker-swag/) can otherwise load a changed file before validation completes.
-3. Copy `.env.example` to `.env`. Set a random admin password of at least 16 characters and a random session secret of at least 32 characters. Set `SWAG_UI_ALLOWED_HOSTS` to the hostname you will use, and keep `SWAG_UI_COOKIE_SECURE=true` for HTTPS access. Set `DOCKER_GID` to the output of `stat -c %g /var/run/docker.sock`. Do not commit `.env`.
+3. Copy `.env.example` to `.env`. Set a random admin password of at least 16 characters and a random session secret of at least 32 characters. Set `SWAG_UI_ALLOWED_HOSTS` to the hostname you will use, and keep `SWAG_UI_COOKIE_SECURE=true` for HTTPS access. Set `DOCKER_GID` to the output of `stat -c %g /var/run/docker.sock`. If SWAG's template uses a `PUID`/`PGID` other than `99`/`100`, set `SWAG_UI_PUID` and `SWAG_UI_PGID` to match. Do not commit `.env`.
 4. Set `SWAG_CONTAINER_NAME` to the exact Docker container name. If Tailscale runs in a container with the CLI, optionally set `TAILSCALE_CONTAINER_NAME`; host-installed Tailscale currently reports `unconfigured`.
 5. To use AI advice, set `LITELLM_BASE_URL` to the gateway's OpenAI-compatible `/v1` base URL, plus `LITELLM_MODEL` and, if required, `LITELLM_API_KEY`. The container needs network reachability to that gateway. Selected text may contain private hostnames; review the redacted preview before sending.
 6. Build and start the service with `docker compose --env-file .env up -d --build`. Map the host port to a private interface or place the app behind a trusted HTTPS reverse proxy. Avoid making this management interface depend on the SWAG instance it controls for emergency access.
@@ -45,7 +45,7 @@ Run every command in this guide on the Unraid server, in its web terminal (the `
    wget -qO- https://github.com/adhatcher/swag-ui/archive/refs/heads/main.tar.gz | tar xz --strip-components=1
    ```
 
-   Any appdata location works. The Compose project takes its name from the folder, so the volume in this guide is named `swag-ui_app_data`.
+   Any appdata location works. The Compose project takes its name from the folder, so the volume in this guide is named `swag-ui_app_data`. If you used another folder, check the real names with `docker volume ls` and adjust the commands below.
 4. Find SWAG's container name and the host folder mapped to its `/config`:
 
    ```sh
@@ -73,6 +73,7 @@ Run every command in this guide on the Unraid server, in its web terminal (the `
 
    The last command prints the sign-in password.
    - `DOCKER_GID` lets the container use the Docker socket without running as root.
+   - If SWAG's `PUID`/`PGID` are not `99`/`100` (check SWAG's template), add `SWAG_UI_PUID` and `SWAG_UI_PGID` with the same values, and use them wherever this guide says `99:100`.
    - `SWAG_UI_BIND_ADDRESS` is the host IP the UI listens on. Use the server's LAN IP, or its Tailscale IP to keep the UI on your tailnet. Never forward this port from the internet.
    - `SWAG_UI_ALLOWED_HOSTS` lists every hostname or IP you will type in the browser, without the port.
    - `SWAG_UI_COOKIE_SECURE=false` is only for plain HTTP on a private network. Set it to `true` when the UI is served over HTTPS.
@@ -93,7 +94,7 @@ To update later, repeat the download in step 3; it keeps your `.env`. Then run t
 Use this instead of Compose if you prefer to manage the container from the Docker tab. It uses the published image, so Unraid's update check covers it. Replace the example IP, hostname and paths with your own; find SWAG's container name and `/config` folder with step 4 above.
 
 1. In SWAG's template, add the variable `SWAG_AUTORELOAD` with the value `false` and apply.
-2. Create the data folder, owned by the container user, and note the Docker socket's group id:
+2. Create the data folder, owned by the container user, and note the Docker socket's group id. Use SWAG's `PUID:PGID` from its template if they are not `99:100`, here and in `--user` below:
 
    ```sh
    mkdir -p /mnt/user/appdata/swag-ui/data && chown 99:100 /mnt/user/appdata/swag-ui/data
@@ -140,7 +141,7 @@ Notes:
 Earlier versions ran a separate `swag-ui-helper` container that shared a socket with `swag-ui`. To move to the single container:
 
 1. Stop and remove the helper: `docker rm -f swag-ui-helper`, and delete its template from the Docker tab. With Compose, run `docker compose down` in the app folder **before** downloading the new code, so the old `web` and `helper` containers are removed.
-2. Copy any backups you want to keep into the new backup folder. With templates: `mkdir -p /mnt/user/appdata/swag-ui/data/backups && cp -a /mnt/user/appdata/swag-ui/backups/. /mnt/user/appdata/swag-ui/data/backups/`. With Compose: `docker run --rm -v swag-ui_backups:/old:ro -v swag-ui_app_data:/data alpine sh -c 'mkdir -p /data/backups && cp -a /old/. /data/backups/'`.
+2. Copy any backups you want to keep into the new backup folder. The Compose commands below assume the default `swag-ui_` volume prefix; check yours with `docker volume ls`. With templates: `mkdir -p /mnt/user/appdata/swag-ui/data/backups && cp -a /mnt/user/appdata/swag-ui/backups/. /mnt/user/appdata/swag-ui/data/backups/`. With Compose: `docker run --rm -v swag-ui_backups:/old:ro -v swag-ui_app_data:/data alpine sh -c 'mkdir -p /data/backups && cp -a /old/. /data/backups/'`.
 3. Give the data folder to the new container user. The old image wrote it as uid 10001, and the new one runs as 99:100 and refuses to start if it cannot write there. With templates: `chown -R 99:100 /mnt/user/appdata/swag-ui/data`. With Compose: `docker run --rm -v swag-ui_app_data:/data alpine chown -R 99:100 /data`.
 4. With templates, edit the `swag-ui` template: remove the `/run/swag-ui` path, change `/swag/proxy-confs` to read/write, add the `/swag/letsencrypt`, `/var/run/docker.sock`, `SWAG_CONTAINER_NAME` and `TAILSCALE_CONTAINER_NAME` entries, and set Extra Parameters as in step 4 of [Using an Unraid Docker template](#using-an-unraid-docker-template). With Compose, download the new code, add `DOCKER_GID` to `.env` (`echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)" >> .env`), and run step 7 of the Compose guide.
 5. Apply, then confirm the overview shows SWAG **running** and auto reload **Disabled**. Once you have confirmed the backups were copied, you can delete the old `backups` folder or the `swag-ui_backups` and `swag-ui_control_socket` volumes.
@@ -155,11 +156,12 @@ Earlier versions ran a separate `swag-ui-helper` container that shared a socket 
 | `required variable DOCKER_GID is missing a value` from Compose | Add `DOCKER_GID=$(stat -c %g /var/run/docker.sock)` to `.env`. |
 | Overview shows SWAG `unavailable` | The container cannot use the Docker socket, or `SWAG_CONTAINER_NAME` is wrong. Check that `/var/run/docker.sock` is mapped, that the `--group-add` value (or `DOCKER_GID`) matches `stat -c %g /var/run/docker.sock`, and that the name matches `docker ps`. |
 | Activation says `blocked: Proxy folder is not writable by this container` | The proxy folder is mapped read-only, or is not writable by 99:100. Map `/swag/proxy-confs` read/write and check the folder's owner with `ls -ln`. |
-| Activation says `blocked: <file> is owned by uid N` | That proxy file was created by another user, often root from a shell. Run `chown 99:100` on the file, then apply again. |
+| Activation says `blocked: <file> is owned by uid N` | That proxy file was created by another user, often root from a shell. Run `chown` on the file to SWAG's `PUID:PGID` (`99:100` by default), then apply again. If every file shows this, the container user does not match SWAG's: set `SWAG_UI_PUID`/`SWAG_UI_PGID` (or `--user`) to SWAG's values. |
 | Auto reload shows **Unknown**, or activation says `blocked: SWAG_AUTORELOAD must be explicitly false` | SWAG's container has no `SWAG_AUTORELOAD` variable, or its value is not `false`. Your draft is still saved; only activation is blocked. Add the variable with the value `false` in SWAG's template and apply, then confirm with `docker inspect <swag container> --format '{{range .Config.Env}}{{println .}}{{end}}' \| grep AUTORELOAD`. |
 | `Invalid host header` in the browser | The hostname or IP in the address bar is missing from `SWAG_UI_ALLOWED_HOSTS`. Add it and run `docker compose --env-file .env up -d`. |
 | Sign-in fails with `Invalid CSRF token` over plain HTTP | `SWAG_UI_COOKIE_SECURE=true` makes the browser discard the session cookie on an `http://` address. Use HTTPS, or set it to `false` on a private network. |
 | `Bind for ... failed: port is already allocated` | Another container already uses the port, often a leftover template container. Remove it or change `SWAG_UI_PORT`. |
+| A certificate shows expiry **Unknown** | The container user cannot read that certificate under SWAG's `etc/letsencrypt`. Check with `ls -ln /mnt/user/appdata/swag/etc/letsencrypt/live /mnt/user/appdata/swag/etc/letsencrypt/archive`; the files must be readable by SWAG's `PUID:PGID`. |
 | No proxy files listed | `SWAG_CONFIG_PATH` (or the template's `/swag/proxy-confs` path) does not point at the folder containing the proxy files, or they are not readable by 99:100. |
 
 Ports and volumes:
@@ -172,7 +174,7 @@ Ports and volumes:
 
 ## Activation and recovery
 
-Activation checks the current file hash, checks that the container can replace the file, backs up the original to `/data/backups` outside SWAG's watched tree, atomically replaces the file, runs `nginx -t`, then asks Nginx to reload. A failed syntax test restores the file without a reload. A failed reload restores the file and reports **active state uncertain** because the running configuration cannot be inferred from a failed signal alone. A successful reload command is reported as **reload requested**, not as proof that every route works. Apply runs to completion within the request, which can take a while if SWAG is slow to answer; if you put a reverse proxy in front of the UI, give it a read timeout above 150 seconds.
+Activation checks the current file hash, checks that the container can replace the file, backs up the original to `/data/backups` outside SWAG's watched tree, atomically replaces the file, runs `nginx -t`, then asks Nginx to reload. A failed syntax test restores the file without a reload. A failed reload restores the file and reports **active state uncertain** because the running configuration cannot be inferred from a failed signal alone. A successful reload command is reported as **reload requested**, not as proof that every route works. Apply runs to completion within the request. Each Docker call gives up after 30 seconds without a reply, and an apply makes up to nine, so a stuck SWAG can hold the request for about four and a half minutes before it reports **blocked** or **active state uncertain**. If you put a reverse proxy in front of the UI, give it a read timeout of at least 300 seconds; a shorter one shows an error while the apply may still finish, so reload the overview and check the file before applying again.
 
 If active state is uncertain, stop applying drafts. Inspect the SWAG container logs and running routes, compare the current file with the backup in `/data/backups`, restore the original if needed, run `nginx -t` in SWAG, and manually reload or restart only after the original configuration is known good. External edits or manual reloads are outside the app's lock; the hash check detects a changed file before activation but cannot prevent another administrator from acting simultaneously.
 

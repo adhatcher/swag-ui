@@ -16,7 +16,7 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
 
 FROM python-base AS web
 COPY --from=frontend-build /frontend/dist/ ./frontend/dist/
-# Run as Unraid's nobody:users (99:100), which owns SWAG's proxy files.
+# Default to Unraid's nobody:users (99:100), SWAG's usual PUID:PGID. Override with --user.
 RUN mkdir -p /data && chown 99:100 /data
 USER 99:100
 EXPOSE 8080

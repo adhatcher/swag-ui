@@ -273,3 +273,61 @@ def test_certificate_metadata_survives_unlistable_folder(tmp_path: Path) -> None
         assert swag.certificate_metadata(live) == []
     finally:
         live.chmod(0o755)
+
+
+def test_write_atomic_skips_fchown_when_owner_matches(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "one.subdomain.conf"
+    target.write_text(ORIGINAL)
+    calls = []
+    monkeypatch.setattr(swag.os, "fchown", lambda *args: calls.append(args))
+
+    swag._write_atomic(target, CANDIDATE.encode())
+
+    assert target.read_text() == CANDIDATE
+    assert calls == []
+
+
+def test_write_atomic_warns_when_owner_cannot_be_kept(tmp_path: Path, monkeypatch, caplog) -> None:
+    target = tmp_path / "one.subdomain.conf"
+    target.write_text(ORIGINAL)
+    gid = target.stat().st_gid
+    monkeypatch.setattr(swag.os, "getegid", lambda: gid + 1)
+
+    def refuse(*args):
+        raise PermissionError("not permitted")
+
+    monkeypatch.setattr(swag.os, "fchown", refuse)
+
+    with caplog.at_level("WARNING", logger="backend.app.swag"):
+        swag._write_atomic(target, CANDIDATE.encode())
+
+    assert target.read_text() == CANDIDATE
+    assert "Could not keep the original owner of one.subdomain.conf" in caplog.text
+
+
+def test_certificate_metadata_reports_unreadable_certificate(tmp_path: Path, monkeypatch) -> None:
+    directory = tmp_path / "live" / "example.com"
+    directory.mkdir(parents=True)
+    (directory / "cert.pem").write_text("unreadable")
+    original_read_bytes = Path.read_bytes
+
+    def read_bytes(self):
+        if self.name == "cert.pem":
+            raise PermissionError("denied")
+        return original_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+
+    assert swag.certificate_metadata(tmp_path / "live") == [
+        {"name": "example.com", "expires_at": None}
+    ]
+
+
+def test_docker_client_uses_bounded_timeout(monkeypatch) -> None:
+    seen = {}
+    monkeypatch.setattr(swag.docker, "from_env", lambda **kwargs: seen.update(kwargs))
+
+    swag.docker_client()
+
+    assert seen == {"timeout": swag.DOCKER_TIMEOUT}
+    assert swag.DOCKER_TIMEOUT == 30
