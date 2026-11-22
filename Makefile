@@ -33,7 +33,6 @@ pr-check:
 	$(UV) run --frozen --extra dev python -m compileall -q backend
 
 build:
-	docker build --target web -t swag-ui:local .
-	docker build --target helper -t swag-ui-helper:local .
+	docker build -t swag-ui:local .
 
 check: lint test security pr-check
