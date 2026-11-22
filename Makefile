@@ -9,8 +9,8 @@ install:
 	cd frontend && $(NPM) ci
 
 lint:
-	$(UV) run --frozen --extra dev ruff check backend helper
-	$(UV) run --frozen --extra dev ruff format --check backend helper
+	$(UV) run --frozen --extra dev ruff check backend
+	$(UV) run --frozen --extra dev ruff format --check backend
 	cd frontend && $(NPM) run lint
 	cd frontend && $(NPM) run typecheck
 
@@ -18,10 +18,10 @@ test:
 	$(UV) run --frozen --extra dev python -m pytest
 
 coverage:
-	$(UV) run --frozen --extra dev python -m pytest --cov=backend.app --cov=helper.control --cov-branch --cov-report=term-missing --cov-fail-under=80
+	$(UV) run --frozen --extra dev python -m pytest --cov=backend.app --cov-branch --cov-report=term-missing --cov-fail-under=80
 
 security:
-	$(UV) run --frozen --extra dev bandit --severity-level medium --confidence-level medium --recursive backend helper --exclude backend/tests
+	$(UV) run --frozen --extra dev bandit --severity-level medium --confidence-level medium --recursive backend --exclude backend/tests
 
 dependency-check:
 	$(UV) lock --check
@@ -30,10 +30,9 @@ dependency-check:
 
 pr-check:
 	git diff --check
-	$(UV) run --frozen --extra dev python -m compileall -q backend helper
+	$(UV) run --frozen --extra dev python -m compileall -q backend
 
 build:
-	docker build --target web -t swag-ui:local .
-	docker build --target helper -t swag-ui-helper:local .
+	docker build -t swag-ui:local .
 
 check: lint test security pr-check

@@ -9,7 +9,10 @@ from pathlib import Path
 class Settings:
     proxy_dir: Path
     data_dir: Path
-    helper_socket: Path
+    backup_dir: Path
+    cert_dir: Path
+    swag_container_name: str
+    tailscale_container_name: str | None
     admin_password: str
     session_secret: str
     cookie_secure: bool
@@ -20,10 +23,14 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        data_dir = Path(os.getenv("SWAG_UI_DATA_DIR", "/data"))
         return cls(
             proxy_dir=Path(os.getenv("SWAG_PROXY_DIR", "/swag/proxy-confs")),
-            data_dir=Path(os.getenv("SWAG_UI_DATA_DIR", "/data")),
-            helper_socket=Path(os.getenv("SWAG_HELPER_SOCKET", "/run/swag-ui/control.sock")),
+            data_dir=data_dir,
+            backup_dir=Path(os.getenv("SWAG_UI_BACKUP_DIR") or data_dir / "backups"),
+            cert_dir=Path(os.getenv("SWAG_CERT_DIR", "/swag/letsencrypt/live")),
+            swag_container_name=os.getenv("SWAG_CONTAINER_NAME") or "swag",
+            tailscale_container_name=os.getenv("TAILSCALE_CONTAINER_NAME") or None,
             admin_password=os.getenv("SWAG_UI_ADMIN_PASSWORD", ""),
             session_secret=os.getenv("SWAG_UI_SESSION_SECRET", ""),
             cookie_secure=os.getenv("SWAG_UI_COOKIE_SECURE", "true").lower() == "true",

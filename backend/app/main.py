@@ -1,5 +1,7 @@
 """Authenticated API and frontend for private SWAG administration."""
 
+import asyncio
+import os
 import secrets
 import time
 from pathlib import Path
@@ -11,11 +13,26 @@ from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from backend.app import swag
 from backend.app.ai import AIUnavailable, redact, suggest
-from backend.app.control_client import ControlClient, ControlTimeout, ControlUnavailable
 from backend.app.drafts import DraftStore
 from backend.app.files import InvalidProxyFile, list_proxies, read_proxy
 from backend.app.settings import Settings
+
+
+class HostCheckMiddleware(TrustedHostMiddleware):
+    """Trusted-host check that lets the container healthcheck reach /healthz.
+
+    The Docker HEALTHCHECK calls http://127.0.0.1:8080/healthz, whose Host header
+    is rarely in SWAG_UI_ALLOWED_HOSTS. /healthz returns no data, so skipping the
+    check for that one path exposes nothing.
+    """
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http" and scope["path"] == "/healthz":
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
 
 
 class LoginBody(BaseModel):
@@ -42,8 +59,16 @@ class PreviewBody(BaseModel):
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.validate()
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    # Check the folder and the files an older image may have left with another owner.
+    for path in (settings.data_dir, settings.data_dir / "swag-ui.sqlite3", settings.backup_dir):
+        if path.exists() and not os.access(path, os.W_OK):
+            raise ValueError(
+                f"{path} is not writable by uid {os.geteuid()}; "
+                "chown -R the data folder to the container user (99:100)"
+            )
     app = FastAPI(title="SWAG UI", docs_url=None, redoc_url=None)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
+    app.add_middleware(HostCheckMiddleware, allowed_hosts=list(settings.allowed_hosts))
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.session_secret,
@@ -52,7 +77,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_age=8 * 60 * 60,
     )
     store = DraftStore(settings.data_dir / "swag-ui.sqlite3")
-    control = ControlClient(settings.helper_socket)
     attempts: dict[str, list[float]] = {}
 
     def require_auth(request: Request) -> None:
@@ -102,14 +126,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/overview", dependencies=[Depends(require_auth)])
     async def overview() -> dict:
-        try:
-            status = await control.status()
-        except ControlUnavailable:
-            status = {
-                "swag": {"state": "unavailable", "auto_reload": "unknown"},
-                "tailscale": {"state": "unavailable"},
-                "certificates": [],
-            }
+        status = await asyncio.to_thread(
+            swag.status,
+            swag_name=settings.swag_container_name,
+            tailscale_name=settings.tailscale_container_name,
+            cert_dir=settings.cert_dir,
+        )
         included = status.get("included_proxies")
         return {
             "proxies": [
@@ -151,17 +173,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         draft = store.get(draft_id)
         if not draft:
             raise HTTPException(404, "Draft unavailable")
-        try:
-            result = await control.activate(draft.name, draft.content, draft.base_hash)
-        except ControlTimeout as exc:
-            store.audit(draft_id, "result_unknown")
-            raise HTTPException(
-                504,
-                "Activation result unknown: the control service did not answer in time and "
-                "may still finish. Check the proxy file and SWAG state before applying again.",
-            ) from exc
-        except ControlUnavailable as exc:
-            raise HTTPException(503, str(exc)) from exc
+        result = await asyncio.to_thread(
+            swag.activate,
+            draft.name,
+            draft.content,
+            draft.base_hash,
+            proxy_dir=settings.proxy_dir,
+            backup_dir=settings.backup_dir,
+            swag_name=settings.swag_container_name,
+        )
         store.audit(draft_id, result.get("status", "unknown"))
         return result
 

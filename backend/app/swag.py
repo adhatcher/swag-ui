@@ -1,4 +1,8 @@
-"""Fixed-operation control service, reachable only through a Unix socket."""
+"""Fixed SWAG operations: activate a proxy file and report SWAG status.
+
+Every Docker call targets the configured SWAG (or Tailscale) container with a fixed
+command; request input never shapes a command or a filesystem path.
+"""
 
 import json
 import logging
@@ -12,8 +16,6 @@ from pathlib import Path
 
 import docker
 from cryptography import x509
-from fastapi import FastAPI
-from pydantic import BaseModel
 
 from backend.app.files import (
     MAX_CONFIG_BYTES,
@@ -25,27 +27,11 @@ from backend.app.files import (
 
 logger = logging.getLogger(__name__)
 
-PROXY_DIR = Path(os.getenv("SWAG_PROXY_DIR", "/swag/proxy-confs"))
-BACKUP_DIR = Path(os.getenv("SWAG_UI_BACKUP_DIR", "/data/backups"))
-CERT_DIR = Path(os.getenv("SWAG_CERT_DIR", "/swag/letsencrypt/live"))
-SWAG_NAME = os.getenv("SWAG_CONTAINER_NAME", "swag")
-TAILSCALE_NAME = os.getenv("TAILSCALE_CONTAINER_NAME")
 lock = threading.Lock()
-app = FastAPI(title="SWAG control", docs_url=None, redoc_url=None)
-
-
-class ActivationBody(BaseModel):
-    name: str
-    content: str
-    base_hash: str
 
 
 def docker_client():
     return docker.from_env()
-
-
-def _container(client):
-    return client.containers.get(SWAG_NAME)
 
 
 def _auto_reload(container) -> str:
@@ -67,12 +53,32 @@ def _exec(container, args: list[str], *, tail_limit: int | None = 3000) -> tuple
     return result.exit_code, output[-tail_limit:] if tail_limit is not None else output
 
 
+def _writable_preflight(path: Path) -> str | None:
+    """Explain why this process cannot safely replace ``path``, or return None."""
+    euid = os.geteuid()
+    if not os.access(path.parent, os.W_OK):
+        return (
+            f"Proxy folder is not writable by this container (uid {euid}); check the container user"
+        )
+    owner = os.stat(path, follow_symlinks=False).st_uid
+    if euid != 0 and owner != euid:
+        return (
+            f"{path.name} is owned by uid {owner}, not this container's uid {euid}; "
+            "fix its owner before applying"
+        )
+    return None
+
+
 def _write_atomic(path: Path, content: bytes) -> None:
     fd, temp_name = tempfile.mkstemp(prefix=".swag-ui-", dir=path.parent)
     try:
         original = os.stat(path, follow_symlinks=False)
         os.fchmod(fd, stat.S_IMODE(original.st_mode))
-        os.fchown(fd, original.st_uid, original.st_gid)
+        if (original.st_uid, original.st_gid) != (os.geteuid(), os.getegid()):
+            try:
+                os.fchown(fd, original.st_uid, original.st_gid)
+            except PermissionError:
+                logger.warning("Could not keep the original group of %s", path.name)
         with os.fdopen(fd, "wb") as handle:
             handle.write(content)
             handle.flush()
@@ -88,31 +94,47 @@ def _write_atomic(path: Path, content: bytes) -> None:
             os.unlink(temp_name)
 
 
-def activate(body: ActivationBody, client=None) -> dict:
+def activate(
+    name: str,
+    content: str,
+    base_hash: str,
+    *,
+    proxy_dir: Path,
+    backup_dir: Path,
+    swag_name: str,
+    client=None,
+) -> dict:
     try:
-        valid_name(body.name)
+        valid_name(name)
     except InvalidProxyFile:
         return {"status": "rejected", "message": "Only direct .conf files can be activated"}
-    candidate = body.content.encode("utf-8")
+    candidate = content.encode("utf-8")
     if len(candidate) > MAX_CONFIG_BYTES:
         return {"status": "rejected", "message": "Draft exceeds size limit"}
     with lock:
-        client = client or docker_client()
         try:
-            container = _container(client)
+            client = client or docker_client()
+            container = client.containers.get(swag_name)
             if _auto_reload(container) != "false":
                 return {"status": "blocked", "message": "SWAG_AUTORELOAD must be explicitly false"}
-            path = proxy_path(PROXY_DIR, body.name)
-            original, digest = read_proxy(PROXY_DIR, path.name)
+            path = proxy_path(proxy_dir, name)
+            original, digest = read_proxy(proxy_dir, path.name)
         except (docker.errors.DockerException, OSError, InvalidProxyFile) as exc:
             logger.warning("Activation preflight failed: %s", type(exc).__name__)
             return {"status": "blocked", "message": "SWAG preflight unavailable"}
-        if digest != body.base_hash:
+        if digest != base_hash:
             return {"status": "conflict", "message": "Proxy changed since draft was created"}
         try:
-            BACKUP_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-            os.chmod(BACKUP_DIR, 0o700)
-            backup = BACKUP_DIR / f"{uuid.uuid4().hex}-{path.name}"
+            problem = _writable_preflight(path)
+        except OSError as exc:
+            logger.warning("Write preflight failed: %s", type(exc).__name__)
+            problem = "Could not check write access to the proxy file"
+        if problem:
+            return {"status": "blocked", "message": problem}
+        try:
+            backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.chmod(backup_dir, 0o700)
+            backup = backup_dir / f"{uuid.uuid4().hex}-{path.name}"
             fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as handle:
                 handle.write(original.encode("utf-8"))
@@ -157,11 +179,11 @@ def activate(body: ActivationBody, client=None) -> dict:
 
 def certificate_metadata(cert_dir: Path) -> list[dict]:
     output = []
-    if not cert_dir.is_dir():
+    try:
+        directories = [entry for entry in cert_dir.iterdir() if entry.is_dir()]
+    except OSError:
         return output
-    for directory in cert_dir.iterdir():
-        if not directory.is_dir():
-            continue
+    for directory in directories:
         certificate = directory / "cert.pem"
         try:
             cert = x509.load_pem_x509_certificate(certificate.read_bytes())
@@ -172,18 +194,19 @@ def certificate_metadata(cert_dir: Path) -> list[dict]:
     return sorted(output, key=lambda item: item["name"])
 
 
-def tailscale_status(client) -> dict:
-    if not TAILSCALE_NAME:
+def tailscale_status(client, tailscale_name: str | None) -> dict:
+    if not tailscale_name:
         return {"state": "unconfigured"}
     try:
-        container = client.containers.get(TAILSCALE_NAME)
+        container = client.containers.get(tailscale_name)
         code, output = _exec(container, ["tailscale", "status", "--json"], tail_limit=None)
         if code != 0:
             return {"state": "unavailable"}
         payload = json.loads(output)
         self_status = payload.get("Self", {})
         return {"state": "online" if self_status.get("Online") else "offline"}
-    except (docker.errors.DockerException, ValueError, KeyError):
+    except (docker.errors.DockerException, OSError, ValueError, KeyError):
+        # docker-py raises requests' OSError subclasses for timeouts and lost connections.
         return {"state": "unavailable"}
 
 
@@ -205,22 +228,17 @@ def included_proxy_names(container) -> list[str] | None:
     return sorted(names)
 
 
-@app.get("/healthz")
-def healthz() -> dict:
-    return {"status": "ok"}
-
-
-@app.get("/status")
-def status() -> dict:
+def status(*, swag_name: str, tailscale_name: str | None, cert_dir: Path, client=None) -> dict:
     try:
-        client = docker_client()
-        container = _container(client)
+        client = client or docker_client()
+        container = client.containers.get(swag_name)
         container.reload()
         state = container.attrs.get("State", {}).get("Status", "unknown")
         auto_reload = _auto_reload(container)
-        tailscale = tailscale_status(client)
+        tailscale = tailscale_status(client, tailscale_name)
         included = included_proxy_names(container)
-    except docker.errors.DockerException:
+    except (docker.errors.DockerException, OSError):
+        # docker-py raises requests' OSError subclasses for timeouts and lost connections.
         state, auto_reload, tailscale, included = (
             "unavailable",
             "unknown",
@@ -230,11 +248,6 @@ def status() -> dict:
     return {
         "swag": {"state": state, "auto_reload": auto_reload},
         "tailscale": tailscale,
-        "certificates": certificate_metadata(CERT_DIR),
+        "certificates": certificate_metadata(cert_dir),
         "included_proxies": included,
     }
-
-
-@app.post("/activate")
-def activate_route(body: ActivationBody) -> dict:
-    return activate(body)
