@@ -179,11 +179,11 @@ def activate(
 
 def certificate_metadata(cert_dir: Path) -> list[dict]:
     output = []
-    if not cert_dir.is_dir():
+    try:
+        directories = [entry for entry in cert_dir.iterdir() if entry.is_dir()]
+    except OSError:
         return output
-    for directory in cert_dir.iterdir():
-        if not directory.is_dir():
-            continue
+    for directory in directories:
         certificate = directory / "cert.pem"
         try:
             cert = x509.load_pem_x509_certificate(certificate.read_bytes())
@@ -205,7 +205,8 @@ def tailscale_status(client, tailscale_name: str | None) -> dict:
         payload = json.loads(output)
         self_status = payload.get("Self", {})
         return {"state": "online" if self_status.get("Online") else "offline"}
-    except (docker.errors.DockerException, ValueError, KeyError):
+    except (docker.errors.DockerException, OSError, ValueError, KeyError):
+        # docker-py raises requests' OSError subclasses for timeouts and lost connections.
         return {"state": "unavailable"}
 
 
@@ -236,7 +237,8 @@ def status(*, swag_name: str, tailscale_name: str | None, cert_dir: Path, client
         auto_reload = _auto_reload(container)
         tailscale = tailscale_status(client, tailscale_name)
         included = included_proxy_names(container)
-    except docker.errors.DockerException:
+    except (docker.errors.DockerException, OSError):
+        # docker-py raises requests' OSError subclasses for timeouts and lost connections.
         state, auto_reload, tailscale, included = (
             "unavailable",
             "unknown",

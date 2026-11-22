@@ -60,11 +60,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.validate()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    if not os.access(settings.data_dir, os.W_OK):
-        raise ValueError(
-            f"{settings.data_dir} is not writable by uid {os.geteuid()}; "
-            "chown it to the container user (99:100)"
-        )
+    # Check the folder and the files an older image may have left with another owner.
+    for path in (settings.data_dir, settings.data_dir / "swag-ui.sqlite3", settings.backup_dir):
+        if path.exists() and not os.access(path, os.W_OK):
+            raise ValueError(
+                f"{path} is not writable by uid {os.geteuid()}; "
+                "chown -R the data folder to the container user (99:100)"
+            )
     app = FastAPI(title="SWAG UI", docs_url=None, redoc_url=None)
     app.add_middleware(HostCheckMiddleware, allowed_hosts=list(settings.allowed_hosts))
     app.add_middleware(

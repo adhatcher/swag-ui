@@ -196,3 +196,14 @@ def test_healthz_skips_host_check_but_api_does_not(tmp_path: Path) -> None:
         assert client.get("/healthz/").status_code == 400
     with TestClient(create_app(settings), base_url="http://swag-ui.example.com") as client:
         assert client.get("/api/session").status_code == 200
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
+def test_unwritable_database_file_fails_fast(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    database = data / "swag-ui.sqlite3"
+    database.write_bytes(b"")
+    database.chmod(0o444)
+    with pytest.raises(ValueError, match=r"swag-ui\.sqlite3 is not writable by uid \d+"):
+        create_app(make_settings(tmp_path, data_dir=data))

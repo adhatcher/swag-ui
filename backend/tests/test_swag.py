@@ -233,3 +233,43 @@ def test_docker_error_during_activation_restores_file(tmp_path: Path) -> None:
     assert live.read_text() == ORIGINAL
     assert container.commands == [["nginx", "-t"]]
     assert len(list((tmp_path / "backups").iterdir())) == 1
+
+
+def test_status_survives_docker_timeout_after_connect(tmp_path: Path) -> None:
+    import requests
+
+    container = FakeContainer()
+    container.attrs["State"] = {"Status": "running"}
+
+    def exec_run(args: list[str], demux: bool = False) -> SimpleNamespace:
+        raise requests.exceptions.ReadTimeout("nginx -T took too long")
+
+    container.exec_run = exec_run
+
+    result = swag.status(
+        swag_name="swag", tailscale_name=None, cert_dir=tmp_path, client=FakeClient(container)
+    )
+
+    assert result["swag"] == {"state": "unavailable", "auto_reload": "unknown"}
+    assert result["included_proxies"] is None
+
+
+def test_tailscale_status_survives_connection_error() -> None:
+    import requests
+
+    def get(name: str):
+        raise requests.exceptions.ConnectionError("daemon restarting")
+
+    client = SimpleNamespace(containers=SimpleNamespace(get=get))
+    assert swag.tailscale_status(client, "tailscale") == {"state": "unavailable"}
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_certificate_metadata_survives_unlistable_folder(tmp_path: Path) -> None:
+    live = tmp_path / "live"
+    live.mkdir()
+    live.chmod(0o311)
+    try:
+        assert swag.certificate_metadata(live) == []
+    finally:
+        live.chmod(0o755)
