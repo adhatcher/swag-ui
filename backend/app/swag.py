@@ -29,9 +29,12 @@ logger = logging.getLogger(__name__)
 
 lock = threading.Lock()
 
+# Seconds docker-py waits for each Docker API call (its default is 60).
+DOCKER_TIMEOUT = 30
+
 
 def docker_client():
-    return docker.from_env()
+    return docker.from_env(timeout=DOCKER_TIMEOUT)
 
 
 def _auto_reload(container) -> str:
@@ -78,7 +81,7 @@ def _write_atomic(path: Path, content: bytes) -> None:
             try:
                 os.fchown(fd, original.st_uid, original.st_gid)
             except PermissionError:
-                logger.warning("Could not keep the original group of %s", path.name)
+                logger.warning("Could not keep the original owner of %s", path.name)
         with os.fdopen(fd, "wb") as handle:
             handle.write(content)
             handle.flush()
@@ -187,10 +190,14 @@ def certificate_metadata(cert_dir: Path) -> list[dict]:
         certificate = directory / "cert.pem"
         try:
             cert = x509.load_pem_x509_certificate(certificate.read_bytes())
-            expiration = cert.not_valid_after_utc.isoformat()
-            output.append({"name": directory.name, "expires_at": expiration})
+        except PermissionError:
+            # The certificate exists but this container's user cannot read it.
+            logger.warning("Certificate for %s is not readable", directory.name)
+            output.append({"name": directory.name, "expires_at": None})
+            continue
         except (OSError, ValueError):
             continue
+        output.append({"name": directory.name, "expires_at": cert.not_valid_after_utc.isoformat()})
     return sorted(output, key=lambda item: item["name"])
 
 
