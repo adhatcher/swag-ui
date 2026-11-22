@@ -3,8 +3,9 @@ services:
     build: .
     image: swag-ui:local
     restart: unless-stopped
-    # Unraid's nobody:users, which owns SWAG's proxy files.
-    user: "99:100"
+    # Match SWAG's PUID:PGID so the app can replace SWAG's proxy files.
+    # Unraid's default is nobody:users (99:100).
+    user: "${SWAG_UI_PUID:-99}:${SWAG_UI_PGID:-100}"
     group_add:
       - "${DOCKER_GID:?set DOCKER_GID to the group id of /var/run/docker.sock (stat -c %g /var/run/docker.sock)}"
     ports:

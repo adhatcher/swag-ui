@@ -65,7 +65,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if path.exists() and not os.access(path, os.W_OK):
             raise ValueError(
                 f"{path} is not writable by uid {os.geteuid()}; "
-                "chown -R the data folder to the container user (99:100)"
+                "chown -R the data folder to the container user "
+                "(SWAG's PUID:PGID, 99:100 by default)"
             )
     app = FastAPI(title="SWAG UI", docs_url=None, redoc_url=None)
     app.add_middleware(HostCheckMiddleware, allowed_hosts=list(settings.allowed_hosts))
